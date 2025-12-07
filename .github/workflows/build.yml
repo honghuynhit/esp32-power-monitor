@@ -8,7 +8,7 @@ on:
       - '**.cpp'
       - '**.h'
       - 'version.txt'
-  workflow_dispatch:
+  workflow_dispatch:x
 
 permissions:
   contents: write
