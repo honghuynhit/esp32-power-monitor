@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'ESP32_Power_Monitor/**'
+      - 'ESP32C6_Power_Monitor/**'
       - 'version.txt'
   workflow_dispatch:
 
@@ -21,6 +22,7 @@ jobs:
           # ESP32 Classic (WROOM)
           - board: esp32
             fqbn: "esp32:esp32:esp32:PartitionScheme=min_spiffs,FlashSize=4M"
+            folder: "ESP32_Power_Monitor"
             sketch: "ESP32_Power_Monitor.ino"
             output: "firmware-esp32.bin"
             chip: "ESP32 Classic"
@@ -28,7 +30,8 @@ jobs:
           # ESP32-C6
           - board: esp32c6
             fqbn: "esp32:esp32:esp32c6:PartitionScheme=min_spiffs,FlashSize=4M"
-            sketch: "ESP32C6_Power_monitor.ino"
+            folder: "ESP32C6_Power_Monitor"
+            sketch: "ESP32C6_Power_Monitor.ino"
             output: "firmware-esp32c6.bin"
             chip: "ESP32-C6"
     
@@ -67,12 +70,12 @@ jobs:
     
     - name: 🔍 Check Sketch Exists
       run: |
-        SKETCH_PATH="ESP32_Power_Monitor/${{ matrix.sketch }}"
+        SKETCH_PATH="${{ matrix.folder }}/${{ matrix.sketch }}"
         
         if [ ! -f "$SKETCH_PATH" ]; then
           echo "❌ Sketch not found: $SKETCH_PATH"
-          echo "Available files in ESP32_Power_Monitor/:"
-          ls -la ESP32_Power_Monitor/
+          echo "Available files in ${{ matrix.folder }}/:"
+          ls -la ${{ matrix.folder }}/ || echo "Folder not found!"
           exit 1
         fi
         
@@ -85,14 +88,15 @@ jobs:
         echo "╚═══════════════════════════════════════╝"
         
         echo "Board: ${{ matrix.fqbn }}"
-        echo "Sketch: ESP32_Power_Monitor/${{ matrix.sketch }}"
+        echo "Folder: ${{ matrix.folder }}"
+        echo "Sketch: ${{ matrix.sketch }}"
         
-        # Build (Arduino CLI cần thư mục chứa file .ino)
+        # Build (Arduino CLI compile folder chứa .ino file)
         arduino-cli compile \
           --fqbn "${{ matrix.fqbn }}" \
           --output-dir "build-${{ matrix.board }}" \
           --verbose \
-          ESP32_Power_Monitor/${{ matrix.sketch }}
+          "${{ matrix.folder }}"
         
         # Find .bin file (bỏ qua bootloader và partitions)
         BIN_FILE=$(find "build-${{ matrix.board }}" -name "*.ino.bin" -o -name "*.bin" | grep -v "bootloader" | grep -v "partitions" | head -n 1)
@@ -249,97 +253,33 @@ jobs:
           
           ---
           
-          ### 📱 Setup Instructions
-          
-          #### First Time Setup (Both Boards)
+          ### 📱 First Time Setup
           
           1. **Uncomment** in your `.ino` file:
              ```cpp
              #define FIRST_TIME_SETUP
              ```
           
-          2. **Upload** to ESP32
+          2. **Upload** to ESP32 and open Serial Monitor (115200 baud)
           
-          3. **Open Serial Monitor** (115200 baud) and enter:
-             - WiFi credentials
-             - Webhook URL
-             - Telegram bot token & chat ID
+          3. **Enter credentials:**
+             - WiFi SSID & Password
+             - Webhook & Telegram credentials
              - **Version URL:** (same for both boards)
                ```
                https://github.com/${{ github.repository }}/releases/latest/download/version.txt
                ```
              - **Binary URL:** (choose based on your board)
-               - ESP32 Classic:
-                 ```
-                 https://github.com/${{ github.repository }}/releases/latest/download/firmware-esp32.bin
-                 ```
-               - ESP32-C6:
-                 ```
-                 https://github.com/${{ github.repository }}/releases/latest/download/firmware-esp32c6.bin
-                 ```
+               - **ESP32 Classic:** `firmware-esp32.bin`
+               - **ESP32-C6:** `firmware-esp32c6.bin`
           
           4. **Comment out** `#define FIRST_TIME_SETUP` and upload again
           
-          5. **Done!** Device will auto-update every 6 hours
+          5. **Done!** Auto-update every 6 hours 🎉
           
           ---
           
-          ### 📥 Manual Flash via esptool
-          
-          **ESP32 Classic:**
-          ```bash
-          esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
-            write_flash -z 0x10000 firmware-esp32.bin
-          ```
-          
-          **ESP32-C6:**
-          ```bash
-          esptool.py --chip esp32c6 --port /dev/ttyUSB0 --baud 921600 \
-            write_flash 0x0 firmware-esp32c6.bin
-          ```
-          
-          ---
-          
-          ### 🔄 Auto-Update Features
-          
-          - ✅ Automatic update check every **6 hours**
-          - ✅ Update check on **device restart**
-          - ✅ **Telegram notification** when update available
-          - ✅ **Progress bar** during download
-          - ✅ **Automatic rollback** if update fails
-          
-          ---
-          
-          ### 📋 What's Included
-          
-          - ⚡ Power monitoring with daily count
-          - 🌙 Night-time alerts (21:30, every 15 min)
-          - ⏰ Long-run alerts (>3h, every 30 min)
-          - 📱 Telegram notifications
-          - 📊 Google Sheets logging
-          - 🔄 OTA updates via GitHub Releases
-          - 💾 NVRAM credentials storage
-          
-          ---
-          
-          ### 🐛 Troubleshooting
-          
-          **Wrong firmware downloaded?**
-          - Check Serial Monitor: `Current chip: ESP32` or `ESP32-C6`
-          - Make sure Binary URL matches your chip
-          
-          **Update failed with "mismatch chip ID"?**
-          - You're using wrong firmware binary
-          - ESP32 Classic needs `firmware-esp32.bin`
-          - ESP32-C6 needs `firmware-esp32c6.bin`
-          
-          **Need help?**
-          - Check Serial Monitor output (115200 baud)
-          - Open an [issue](https://github.com/${{ github.repository }}/issues)
-          
-          ---
-          
-          🤖 *Built automatically with GitHub Actions*
+          🤖 *Built with GitHub Actions*
           
           📅 *Commit: `${{ github.sha }}`*
         files: |
@@ -383,7 +323,4 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         
         echo "### ✅ Next Steps" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "1. ✅ Release created: [v${{ steps.version.outputs.version }}](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.version }})" >> $GITHUB_STEP_SUMMARY
-        echo "2. 📱 ESP32 devices will auto-update within 6 hours" >> $GITHUB_STEP_SUMMARY
-        echo "3. 🔄 Or restart devices to update immediately" >> $GITHUB_STEP_SUMMARY
+        echo "📱 ESP32 devices will auto-update within 6 hours" >> $GITHUB_STEP_SUMMARY
