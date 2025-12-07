@@ -1,8 +1,13 @@
-name: ESP32 Build with PlatformIO -- fix
+name: ESP32 Build & Release
 
 on:
   push:
     branches: [main]
+    paths:
+      - '**.ino'
+      - '**.cpp'
+      - '**.h'
+      - 'version.txt'
   workflow_dispatch:
 
 permissions:
@@ -13,54 +18,175 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - name: 📥 Checkout
+      uses: actions/checkout@v4
     
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+    - name: 🔧 Setup Arduino CLI
+      uses: arduino/setup-arduino-cli@v1
     
-    - name: Install PlatformIO
+    - name: 📦 Install ESP32 Core
       run: |
-        python -m pip install --upgrade pip
-        pip install platformio
+        arduino-cli config init
+        arduino-cli core update-index
+        arduino-cli core install esp32:esp32@2.0.17
+        echo "✓ Installed ESP32 core 2.0.17"
     
-    - name: Read version
+    - name: 📖 Read Version
       id: version
       run: |
-        VERSION=$(cat version.txt | tr -d '\n\r')
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        if [ -f version.txt ]; then
+          VERSION=$(cat version.txt | tr -d '\n\r')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "✓ Version: $VERSION"
+        else
+          echo "version=1.0.0" >> $GITHUB_OUTPUT
+          echo "1.0.0" > version.txt
+          echo "⚠ Created version.txt with 1.0.0"
+        fi
     
-    - name: Build firmware
+    - name: 🔨 Build Firmware
       run: |
-        # Tạo platformio.ini nếu chưa có
-        if [ ! -f platformio.ini ]; then
-          cat > platformio.ini << 'EOF'
-          [env:esp32dev]
-          platform = espressif32@6.4.0
-          board = esp32dev
-          framework = arduino
-          monitor_speed = 115200
-          board_build.partitions = min_spiffs.csv
-          upload_speed = 921600
-          EOF
+        echo "Building ESP32 firmware..."
+        
+        # Find .ino file
+        INO_FILE=$(find . -name "*.ino" | head -n 1)
+        
+        if [ -z "$INO_FILE" ]; then
+          echo "❌ No .ino file found!"
+          exit 1
         fi
         
-        # Build
-        pio run
+        echo "Found sketch: $INO_FILE"
+        SKETCH_DIR=$(dirname "$INO_FILE")
+        echo "Sketch directory: $SKETCH_DIR"
         
-        # Copy firmware
-        cp .pio/build/esp32dev/firmware.bin firmware.bin
+        # Build with partition scheme
+        arduino-cli compile \
+          --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs,FlashSize=4M \
+          --output-dir build \
+          --verbose \
+          "$SKETCH_DIR"
+        
+        # Find .bin file
+        BIN_FILE=$(find build -name "*.ino.bin" -o -name "*.bin" | grep -v "bootloader" | grep -v "partitions" | head -n 1)
+        
+        if [ -z "$BIN_FILE" ]; then
+          echo "❌ No .bin file generated!"
+          echo "Files in build directory:"
+          ls -la build/
+          exit 1
+        fi
+        
+        echo "Found binary: $BIN_FILE"
+        cp "$BIN_FILE" firmware.bin
         
         # Verify
-        SIZE=$(stat -c%s firmware.bin)
-        echo "✓ Size: $SIZE bytes"
+        SIZE=$(stat -c%s firmware.bin 2>/dev/null || stat -f%z firmware.bin)
+        MAGIC=$(xxd -p -l 1 firmware.bin)
+        
+        echo "✓ Firmware built successfully!"
+        echo "✓ Size: $SIZE bytes ($(echo "scale=2; $SIZE/1024" | bc) KB)"
+        echo "✓ Magic number: 0x$MAGIC"
+        
+        if [ "$MAGIC" != "e9" ]; then
+          echo "⚠️ Warning: Magic number should be 0xE9 for ESP32"
+        fi
+        
+        if [ $SIZE -lt 100000 ]; then
+          echo "❌ Error: Firmware too small ($SIZE bytes)"
+          exit 1
+        fi
+        
+        ls -lh firmware.bin
+        xxd -l 64 firmware.bin
+    
+    - name: ✅ Verify Firmware
+      run: |
+        echo "=== Firmware Verification ==="
+        
+        SIZE=$(stat -c%s firmware.bin 2>/dev/null || stat -f%z firmware.bin)
+        echo "Size: $SIZE bytes"
+        
+        if [ $SIZE -lt 100000 ]; then
+          echo "❌ File too small!"
+          exit 1
+        fi
+        
+        MAGIC=$(xxd -p -l 1 firmware.bin)
+        echo "Magic: 0x$MAGIC"
+        
+        if [ "$MAGIC" = "e9" ]; then
+          echo "✓ Valid ESP32 firmware"
+        else
+          echo "⚠️ Warning: Unexpected magic number"
+        fi
+        
+        echo "First 32 bytes:"
         xxd -l 32 firmware.bin
     
-    - name: Commit and push
+    - name: 📤 Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.version.outputs.version }}
+        name: Release v${{ steps.version.outputs.version }}
+        body: |
+          ## ESP32 Power Monitor v${{ steps.version.outputs.version }}
+          
+          ### 📦 Files
+          - `firmware.bin` - ESP32 firmware binary
+          - `version.txt` - Version file
+          
+          ### 🔗 OTA URLs (Always Latest)
+          ```
+          https://github.com/${{ github.repository }}/releases/latest/download/firmware.bin
+          https://github.com/${{ github.repository }}/releases/latest/download/version.txt
+          ```
+          
+          ### 🔗 This Version URLs
+          ```
+          https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/firmware.bin
+          https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/version.txt
+          ```
+          
+          ### 📱 Installation
+          Flash using esptool or let ESP32 auto-update via OTA.
+          
+          ---
+          *Built with GitHub Actions*
+        files: |
+          firmware.bin
+          version.txt
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: 📝 Job Summary
       run: |
-        git config user.name "GitHub Actions"
-        git config user.email "actions@github.com"
-        git add firmware.bin
-        git commit -m "Build v${{ steps.version.outputs.version }} [skip ci]" || exit 0
-        git push
+        echo "## ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📦 Firmware Information" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        
+        SIZE=$(stat -c%s firmware.bin 2>/dev/null || stat -f%z firmware.bin)
+        SIZE_KB=$(echo "scale=2; $SIZE/1024" | bc)
+        echo "- **Size:** $SIZE bytes ($SIZE_KB KB)" >> $GITHUB_STEP_SUMMARY
+        
+        MAGIC=$(xxd -p -l 1 firmware.bin)
+        echo "- **Magic:** 0x$MAGIC" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### 🔗 Release URLs" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "Latest: https://github.com/${{ github.repository }}/releases/latest/download/firmware.bin" >> $GITHUB_STEP_SUMMARY
+        echo "This:   https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/firmware.bin" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "$MAGIC" = "e9" ] && [ $SIZE -gt 100000 ]; then
+          echo "### ✅ Firmware validation: PASSED" >> $GITHUB_STEP_SUMMARY
+          echo "📱 ESP32 will auto-update within 6 hours" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "### ⚠️ Firmware validation: WARNING" >> $GITHUB_STEP_SUMMARY
+        fi
