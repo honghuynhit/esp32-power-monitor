@@ -23,7 +23,7 @@ String firmwareBinURL;
 
 // ========== Settings ==========
 const char* DEVICE_NAME = "ESP32-Power-Monitor";
-const char* CURRENT_VERSION = "1.0.4";  // Version mới với progress bar
+const char* CURRENT_VERSION = "1.0.8";  // Version mới với progress bar
 const int NIGHT_CHECK_HOUR = 21;
 const int NIGHT_CHECK_MINUTE = 30;
 const int NIGHT_ALERT_INTERVAL = 15;
@@ -392,7 +392,23 @@ void performOTAUpdate() {
   client.setInsecure();
   
   HTTPClient http;
-  http.begin(client, firmwareBinURL.c_str());
+  
+  // Add cache-busting parameter
+  String url = firmwareBinURL;
+  if (url.indexOf('?') == -1) {
+    url += "?t=" + String(millis());
+  } else {
+    url += "&t=" + String(millis());
+  }
+  
+  Serial.println("Download URL: " + url);
+  
+  http.begin(client, url.c_str());
+  
+  // Force no-cache headers
+  http.addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  http.addHeader("Pragma", "no-cache");
+  http.addHeader("Expires", "0");
   
   int httpCode = http.GET();
   
