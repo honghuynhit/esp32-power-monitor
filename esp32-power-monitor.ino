@@ -23,7 +23,7 @@ String firmwareBinURL;
 
 // ========== Settings ==========
 const char* DEVICE_NAME = "ESP32-Power-Monitor";
-const char* CURRENT_VERSION = "1.0.3";  // Version mới
+const char* CURRENT_VERSION = "1.0.4";  // Version mới với progress bar
 const int NIGHT_CHECK_HOUR = 21;
 const int NIGHT_CHECK_MINUTE = 30;
 const int NIGHT_ALERT_INTERVAL = 15;
@@ -50,8 +50,8 @@ void setup() {
   delay(1000);
   
   Serial.println("\n╔════════════════════════════════════════╗");
-  Serial.println("║   ESP32 Power Monitor v1.0.3           ║");
-  Serial.println("║   + NVRAM Credentials Storage          ║");
+  Serial.println("║   ESP32 Power Monitor v1.0.4           ║");
+  Serial.println("║   + NVRAM + OTA Progress Bar           ║");
   Serial.println("╚════════════════════════════════════════╝");
   
   // Khởi tạo NVRAM storage
@@ -380,6 +380,8 @@ void checkForOTAUpdate() {
     } else {
       Serial.println("✓ Đã mới nhất");
     }
+  } else {
+    Serial.printf("✗ Lỗi kiểm tra version: HTTP %d\n", httpCode);
   }
   
   http.end();
@@ -396,19 +398,95 @@ void performOTAUpdate() {
   
   if (httpCode == 200) {
     int contentLength = http.getSize();
-    Serial.printf("Firmware: %d bytes\n", contentLength);
     
-    if (Update.begin(contentLength)) {
-      WiFiClient * stream = http.getStreamPtr();
-      size_t written = Update.writeStream(*stream);
-      
-      if (Update.end() && Update.isFinished()) {
-        Serial.println("✓ Update thành công!");
-        sendTelegramMessage("✅ Cập nhật thành công!\n🔄 Khởi động lại...");
-        delay(2000);
-        ESP.restart();
-      }
+    if (contentLength <= 0) {
+      Serial.println("❌ Không lấy được kích thước firmware!");
+      http.end();
+      return;
     }
+    
+    Serial.printf("📦 Firmware: %d bytes (%.2f KB)\n", contentLength, contentLength / 1024.0);
+    
+    if (!Update.begin(contentLength)) {
+      Serial.println("❌ Không đủ bộ nhớ để update!");
+      Serial.printf("   Cần: %d bytes\n", contentLength);
+      http.end();
+      return;
+    }
+    
+    Serial.println("┌─────────────────────────────────────────┐");
+    Serial.println("│  🔄 Đang cập nhật firmware...           │");
+    Serial.println("└─────────────────────────────────────────┘");
+    
+    WiFiClient * stream = http.getStreamPtr();
+    uint8_t buff[128] = { 0 };
+    size_t written = 0;
+    int lastPercent = -1;
+    unsigned long startTime = millis();
+    
+    // Đọc và ghi từng chunk với progress bar
+    while (http.connected() && (written < contentLength)) {
+      size_t available = stream->available();
+      
+      if (available) {
+        int c = stream->readBytes(buff, min(available, sizeof(buff)));
+        
+        if (c > 0) {
+          Update.write(buff, c);
+          written += c;
+          
+          // Tính % và hiển thị
+          int percent = (written * 100) / contentLength;
+          
+          // Hiển thị mỗi 5%
+          if (percent != lastPercent && percent % 5 == 0) {
+            // Progress bar với 20 ký tự
+            Serial.print("\r[");
+            int bars = percent / 5;
+            for (int i = 0; i < 20; i++) {
+              if (i < bars) Serial.print("█");
+              else Serial.print("░");
+            }
+            
+            // Tính tốc độ
+            unsigned long elapsed = millis() - startTime;
+            float speed = (elapsed > 0) ? (written / 1024.0) / (elapsed / 1000.0) : 0;
+            
+            Serial.printf("] %3d%% | %d/%d KB | %.1f KB/s", 
+                         percent, 
+                         written / 1024, 
+                         contentLength / 1024,
+                         speed);
+            
+            lastPercent = percent;
+          }
+        }
+      }
+      delay(1);
+    }
+    
+    Serial.println(); // Xuống dòng sau progress bar
+    
+    if (Update.end(true)) {
+      if (Update.isFinished()) {
+        unsigned long elapsed = millis() - startTime;
+        Serial.println("\n✅ Cập nhật thành công!");
+        Serial.printf("📊 Đã ghi: %d bytes trong %.1f giây\n", written, elapsed / 1000.0);
+        
+        sendTelegramMessage("✅ Cập nhật thành công!\n📦 " + String(contentLength / 1024) + " KB\n🔄 Khởi động lại...");
+        
+        Serial.println("🔄 Khởi động lại trong 3 giây...");
+        delay(3000);
+        ESP.restart();
+      } else {
+        Serial.println("\n❌ Update không hoàn tất!");
+      }
+    } else {
+      Serial.println("\n❌ Update.end() thất bại!");
+      Serial.printf("Error: %s\n", Update.errorString());
+    }
+  } else {
+    Serial.printf("❌ HTTP GET failed: %d\n", httpCode);
   }
   
   http.end();
