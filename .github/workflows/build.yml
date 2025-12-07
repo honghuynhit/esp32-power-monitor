@@ -1,14 +1,12 @@
-name: ESP32 Build & Release
+name: ESP32 Multi-Board Build & Release
 
 on:
   push:
     branches: [main]
     paths:
-      - '**.ino'
-      - '**.cpp'
-      - '**.h'
+      - 'ESP32_Power_Monitor/**'
       - 'version.txt'
-  workflow_dispatch:x
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,6 +14,25 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        include:
+          # ESP32 Classic (WROOM)
+          - board: esp32
+            fqbn: "esp32:esp32:esp32:PartitionScheme=min_spiffs,FlashSize=4M"
+            sketch: "ESP32_Power_Monitor.ino"
+            output: "firmware-esp32.bin"
+            chip: "ESP32 Classic"
+          
+          # ESP32-C6
+          - board: esp32c6
+            fqbn: "esp32:esp32:esp32c6:PartitionScheme=min_spiffs,FlashSize=4M"
+            sketch: "ESP32C6_Power_monitor.ino"
+            output: "firmware-esp32c6.bin"
+            chip: "ESP32-C6"
+    
+    name: Build ${{ matrix.chip }}
     
     steps:
     - name: 📥 Checkout
@@ -28,8 +45,12 @@ jobs:
       run: |
         arduino-cli config init
         arduino-cli core update-index
-        arduino-cli core install esp32:esp32@2.0.17
-        echo "✓ Installed ESP32 core 2.0.17"
+        
+        # Install ESP32 core với support cho C6
+        arduino-cli core install esp32:esp32@3.0.7
+        
+        echo "✓ Installed ESP32 core 3.0.7"
+        echo "✓ Supports: ESP32, ESP32-S2, ESP32-S3, ESP32-C3, ESP32-C6"
     
     - name: 📖 Read Version
       id: version
@@ -44,85 +65,147 @@ jobs:
           echo "⚠ Created version.txt with 1.0.0"
         fi
     
-    - name: 🔨 Build Firmware
+    - name: 🔍 Check Sketch Exists
       run: |
-        echo "Building ESP32 firmware..."
+        SKETCH_PATH="ESP32_Power_Monitor/${{ matrix.sketch }}"
         
-        # Find .ino file
-        INO_FILE=$(find . -name "*.ino" | head -n 1)
-        
-        if [ -z "$INO_FILE" ]; then
-          echo "❌ No .ino file found!"
+        if [ ! -f "$SKETCH_PATH" ]; then
+          echo "❌ Sketch not found: $SKETCH_PATH"
+          echo "Available files in ESP32_Power_Monitor/:"
+          ls -la ESP32_Power_Monitor/
           exit 1
         fi
         
-        echo "Found sketch: $INO_FILE"
-        SKETCH_DIR=$(dirname "$INO_FILE")
-        echo "Sketch directory: $SKETCH_DIR"
+        echo "✓ Found sketch: $SKETCH_PATH"
+    
+    - name: 🔨 Build Firmware for ${{ matrix.chip }}
+      run: |
+        echo "╔═══════════════════════════════════════╗"
+        echo "║  Building for ${{ matrix.chip }}"
+        echo "╚═══════════════════════════════════════╝"
         
-        # Build with partition scheme
+        echo "Board: ${{ matrix.fqbn }}"
+        echo "Sketch: ESP32_Power_Monitor/${{ matrix.sketch }}"
+        
+        # Build (Arduino CLI cần thư mục chứa file .ino)
         arduino-cli compile \
-          --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs,FlashSize=4M \
-          --output-dir build \
+          --fqbn "${{ matrix.fqbn }}" \
+          --output-dir "build-${{ matrix.board }}" \
           --verbose \
-          "$SKETCH_DIR"
+          ESP32_Power_Monitor/${{ matrix.sketch }}
         
-        # Find .bin file
-        BIN_FILE=$(find build -name "*.ino.bin" -o -name "*.bin" | grep -v "bootloader" | grep -v "partitions" | head -n 1)
+        # Find .bin file (bỏ qua bootloader và partitions)
+        BIN_FILE=$(find "build-${{ matrix.board }}" -name "*.ino.bin" -o -name "*.bin" | grep -v "bootloader" | grep -v "partitions" | head -n 1)
         
         if [ -z "$BIN_FILE" ]; then
           echo "❌ No .bin file generated!"
           echo "Files in build directory:"
-          ls -la build/
+          ls -la "build-${{ matrix.board }}/"
           exit 1
         fi
         
         echo "Found binary: $BIN_FILE"
-        cp "$BIN_FILE" firmware.bin
+        cp "$BIN_FILE" "${{ matrix.output }}"
         
         # Verify
-        SIZE=$(stat -c%s firmware.bin 2>/dev/null || stat -f%z firmware.bin)
-        MAGIC=$(xxd -p -l 1 firmware.bin)
+        SIZE=$(stat -c%s "${{ matrix.output }}" 2>/dev/null || stat -f%z "${{ matrix.output }}")
+        MAGIC=$(xxd -p -l 1 "${{ matrix.output }}")
         
+        echo ""
         echo "✓ Firmware built successfully!"
+        echo "✓ Output: ${{ matrix.output }}"
         echo "✓ Size: $SIZE bytes ($(echo "scale=2; $SIZE/1024" | bc) KB)"
         echo "✓ Magic number: 0x$MAGIC"
-        
-        if [ "$MAGIC" != "e9" ]; then
-          echo "⚠️ Warning: Magic number should be 0xE9 for ESP32"
-        fi
         
         if [ $SIZE -lt 100000 ]; then
           echo "❌ Error: Firmware too small ($SIZE bytes)"
           exit 1
         fi
         
-        ls -lh firmware.bin
-        xxd -l 64 firmware.bin
+        ls -lh "${{ matrix.output }}"
+        echo "First 64 bytes:"
+        xxd -l 64 "${{ matrix.output }}"
     
     - name: ✅ Verify Firmware
       run: |
-        echo "=== Firmware Verification ==="
+        echo "=== Firmware Verification for ${{ matrix.chip }} ==="
         
-        SIZE=$(stat -c%s firmware.bin 2>/dev/null || stat -f%z firmware.bin)
-        echo "Size: $SIZE bytes"
+        SIZE=$(stat -c%s "${{ matrix.output }}" 2>/dev/null || stat -f%z "${{ matrix.output }}")
+        echo "Size: $SIZE bytes ($(echo "scale=2; $SIZE/1024" | bc) KB)"
         
         if [ $SIZE -lt 100000 ]; then
           echo "❌ File too small!"
           exit 1
         fi
         
-        MAGIC=$(xxd -p -l 1 firmware.bin)
+        MAGIC=$(xxd -p -l 1 "${{ matrix.output }}")
         echo "Magic: 0x$MAGIC"
         
         if [ "$MAGIC" = "e9" ]; then
           echo "✓ Valid ESP32 firmware"
         else
-          echo "⚠️ Warning: Unexpected magic number"
+          echo "⚠️ Warning: Unexpected magic number (expected 0xE9)"
         fi
         
         echo "First 32 bytes:"
-        xxd -l 32 firmware.bin
+        xxd -l 32 "${{ matrix.output }}"
+    
+    - name: 📤 Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ matrix.board }}
+        path: ${{ matrix.output }}
+        retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout
+      uses: actions/checkout@v4
+    
+    - name: 📖 Read Version
+      id: version
+      run: |
+        VERSION=$(cat version.txt | tr -d '\n\r')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+    
+    - name: 📥 Download All Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: 📦 Prepare Release Files
+      run: |
+        echo "Organizing release files..."
+        
+        # ESP32 Classic
+        if [ -f "artifacts/firmware-esp32/firmware-esp32.bin" ]; then
+          cp "artifacts/firmware-esp32/firmware-esp32.bin" "firmware-esp32.bin"
+          SIZE_ESP32=$(stat -c%s firmware-esp32.bin 2>/dev/null || stat -f%z firmware-esp32.bin)
+          SIZE_ESP32_KB=$(echo "scale=2; $SIZE_ESP32/1024" | bc)
+          echo "✓ ESP32 firmware ready: $SIZE_ESP32_KB KB"
+          echo "SIZE_ESP32=$SIZE_ESP32" >> $GITHUB_ENV
+          echo "SIZE_ESP32_KB=$SIZE_ESP32_KB" >> $GITHUB_ENV
+        fi
+        
+        # ESP32-C6
+        if [ -f "artifacts/firmware-esp32c6/firmware-esp32c6.bin" ]; then
+          cp "artifacts/firmware-esp32c6/firmware-esp32c6.bin" "firmware-esp32c6.bin"
+          SIZE_C6=$(stat -c%s firmware-esp32c6.bin 2>/dev/null || stat -f%z firmware-esp32c6.bin)
+          SIZE_C6_KB=$(echo "scale=2; $SIZE_C6/1024" | bc)
+          echo "✓ ESP32-C6 firmware ready: $SIZE_C6_KB KB"
+          echo "SIZE_C6=$SIZE_C6" >> $GITHUB_ENV
+          echo "SIZE_C6_KB=$SIZE_C6_KB" >> $GITHUB_ENV
+        fi
+        
+        # Copy version.txt
+        cp version.txt version.txt
+        
+        echo ""
+        echo "Files for release:"
+        ls -lh firmware-*.bin version.txt
     
     - name: 📤 Create Release
       uses: softprops/action-gh-release@v1
@@ -130,31 +213,138 @@ jobs:
         tag_name: v${{ steps.version.outputs.version }}
         name: Release v${{ steps.version.outputs.version }}
         body: |
-          ## ESP32 Power Monitor v${{ steps.version.outputs.version }}
+          ## 🎉 ESP32 Power Monitor v${{ steps.version.outputs.version }}
           
-          ### 📦 Files
-          - `firmware.bin` - ESP32 firmware binary
-          - `version.txt` - Version file
+          ### 📦 Firmware Files
           
-          ### 🔗 OTA URLs (Always Latest)
-          ```
-          https://github.com/${{ github.repository }}/releases/latest/download/firmware.bin
-          https://github.com/${{ github.repository }}/releases/latest/download/version.txt
-          ```
-          
-          ### 🔗 This Version URLs
-          ```
-          https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/firmware.bin
-          https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/version.txt
-          ```
-          
-          ### 📱 Installation
-          Flash using esptool or let ESP32 auto-update via OTA.
+          | Board | File | Size | Download |
+          |-------|------|------|----------|
+          | **ESP32 Classic (WROOM)** | `firmware-esp32.bin` | ${{ env.SIZE_ESP32_KB }} KB | ⬇️ [Download](https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/firmware-esp32.bin) |
+          | **ESP32-C6** | `firmware-esp32c6.bin` | ${{ env.SIZE_C6_KB }} KB | ⬇️ [Download](https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/firmware-esp32c6.bin) |
+          | **Version File** | `version.txt` | - | ⬇️ [Download](https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/version.txt) |
           
           ---
-          *Built with GitHub Actions*
+          
+          ### 🔗 OTA URLs (Always Latest)
+          
+          #### For ESP32 Classic (WROOM)
+          ```
+          Version URL:
+          https://github.com/${{ github.repository }}/releases/latest/download/version.txt
+          
+          Binary URL:
+          https://github.com/${{ github.repository }}/releases/latest/download/firmware-esp32.bin
+          ```
+          
+          #### For ESP32-C6
+          ```
+          Version URL:
+          https://github.com/${{ github.repository }}/releases/latest/download/version.txt
+          
+          Binary URL:
+          https://github.com/${{ github.repository }}/releases/latest/download/firmware-esp32c6.bin
+          ```
+          
+          > ⚠️ **Important:** Make sure you use the correct binary URL for your board type!
+          
+          ---
+          
+          ### 📱 Setup Instructions
+          
+          #### First Time Setup (Both Boards)
+          
+          1. **Uncomment** in your `.ino` file:
+             ```cpp
+             #define FIRST_TIME_SETUP
+             ```
+          
+          2. **Upload** to ESP32
+          
+          3. **Open Serial Monitor** (115200 baud) and enter:
+             - WiFi credentials
+             - Webhook URL
+             - Telegram bot token & chat ID
+             - **Version URL:** (same for both boards)
+               ```
+               https://github.com/${{ github.repository }}/releases/latest/download/version.txt
+               ```
+             - **Binary URL:** (choose based on your board)
+               - ESP32 Classic:
+                 ```
+                 https://github.com/${{ github.repository }}/releases/latest/download/firmware-esp32.bin
+                 ```
+               - ESP32-C6:
+                 ```
+                 https://github.com/${{ github.repository }}/releases/latest/download/firmware-esp32c6.bin
+                 ```
+          
+          4. **Comment out** `#define FIRST_TIME_SETUP` and upload again
+          
+          5. **Done!** Device will auto-update every 6 hours
+          
+          ---
+          
+          ### 📥 Manual Flash via esptool
+          
+          **ESP32 Classic:**
+          ```bash
+          esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
+            write_flash -z 0x10000 firmware-esp32.bin
+          ```
+          
+          **ESP32-C6:**
+          ```bash
+          esptool.py --chip esp32c6 --port /dev/ttyUSB0 --baud 921600 \
+            write_flash 0x0 firmware-esp32c6.bin
+          ```
+          
+          ---
+          
+          ### 🔄 Auto-Update Features
+          
+          - ✅ Automatic update check every **6 hours**
+          - ✅ Update check on **device restart**
+          - ✅ **Telegram notification** when update available
+          - ✅ **Progress bar** during download
+          - ✅ **Automatic rollback** if update fails
+          
+          ---
+          
+          ### 📋 What's Included
+          
+          - ⚡ Power monitoring with daily count
+          - 🌙 Night-time alerts (21:30, every 15 min)
+          - ⏰ Long-run alerts (>3h, every 30 min)
+          - 📱 Telegram notifications
+          - 📊 Google Sheets logging
+          - 🔄 OTA updates via GitHub Releases
+          - 💾 NVRAM credentials storage
+          
+          ---
+          
+          ### 🐛 Troubleshooting
+          
+          **Wrong firmware downloaded?**
+          - Check Serial Monitor: `Current chip: ESP32` or `ESP32-C6`
+          - Make sure Binary URL matches your chip
+          
+          **Update failed with "mismatch chip ID"?**
+          - You're using wrong firmware binary
+          - ESP32 Classic needs `firmware-esp32.bin`
+          - ESP32-C6 needs `firmware-esp32c6.bin`
+          
+          **Need help?**
+          - Check Serial Monitor output (115200 baud)
+          - Open an [issue](https://github.com/${{ github.repository }}/issues)
+          
+          ---
+          
+          🤖 *Built automatically with GitHub Actions*
+          
+          📅 *Commit: `${{ github.sha }}`*
         files: |
-          firmware.bin
+          firmware-esp32.bin
+          firmware-esp32c6.bin
           version.txt
         draft: false
         prerelease: false
@@ -163,30 +353,37 @@ jobs:
     
     - name: 📝 Job Summary
       run: |
-        echo "## ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
+        echo "## ✅ Multi-Board Build Successful!" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
+        
         echo "### 📦 Firmware Information" >> $GITHUB_STEP_SUMMARY
         echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        
-        SIZE=$(stat -c%s firmware.bin 2>/dev/null || stat -f%z firmware.bin)
-        SIZE_KB=$(echo "scale=2; $SIZE/1024" | bc)
-        echo "- **Size:** $SIZE bytes ($SIZE_KB KB)" >> $GITHUB_STEP_SUMMARY
-        
-        MAGIC=$(xxd -p -l 1 firmware.bin)
-        echo "- **Magic:** 0x$MAGIC" >> $GITHUB_STEP_SUMMARY
-        echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        echo "### 🔗 Release URLs" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Build Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Board | File | Size |" >> $GITHUB_STEP_SUMMARY
+        echo "|-------|------|------|" >> $GITHUB_STEP_SUMMARY
+        echo "| ESP32 Classic | firmware-esp32.bin | ${{ env.SIZE_ESP32_KB }} KB |" >> $GITHUB_STEP_SUMMARY
+        echo "| ESP32-C6 | firmware-esp32c6.bin | ${{ env.SIZE_C6_KB }} KB |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### 🔗 OTA URLs" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**ESP32 Classic:**" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "Latest: https://github.com/${{ github.repository }}/releases/latest/download/firmware.bin" >> $GITHUB_STEP_SUMMARY
-        echo "This:   https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/firmware.bin" >> $GITHUB_STEP_SUMMARY
+        echo "https://github.com/${{ github.repository }}/releases/latest/download/firmware-esp32.bin" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**ESP32-C6:**" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "https://github.com/${{ github.repository }}/releases/latest/download/firmware-esp32c6.bin" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        if [ "$MAGIC" = "e9" ] && [ $SIZE -gt 100000 ]; then
-          echo "### ✅ Firmware validation: PASSED" >> $GITHUB_STEP_SUMMARY
-          echo "📱 ESP32 will auto-update within 6 hours" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "### ⚠️ Firmware validation: WARNING" >> $GITHUB_STEP_SUMMARY
-        fi
+        echo "### ✅ Next Steps" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "1. ✅ Release created: [v${{ steps.version.outputs.version }}](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.version }})" >> $GITHUB_STEP_SUMMARY
+        echo "2. 📱 ESP32 devices will auto-update within 6 hours" >> $GITHUB_STEP_SUMMARY
+        echo "3. 🔄 Or restart devices to update immediately" >> $GITHUB_STEP_SUMMARY
