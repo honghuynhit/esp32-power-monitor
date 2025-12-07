@@ -98,17 +98,32 @@ jobs:
           --verbose \
           "${{ matrix.folder }}"
         
-        # Find .bin file (bỏ qua bootloader và partitions)
-        BIN_FILE=$(find "build-${{ matrix.board }}" -name "*.ino.bin" -o -name "*.bin" | grep -v "bootloader" | grep -v "partitions" | head -n 1)
+        echo ""
+        echo "Build directory contents:"
+        ls -lh "build-${{ matrix.board }}/"
         
-        if [ -z "$BIN_FILE" ]; then
+        # Find the SMALLEST .bin file (actual firmware without padding)
+        # Exclude bootloader and partitions
+        BIN_FILES=$(find "build-${{ matrix.board }}" -name "*.bin" | grep -v "bootloader" | grep -v "partitions")
+        
+        if [ -z "$BIN_FILES" ]; then
           echo "❌ No .bin file generated!"
-          echo "Files in build directory:"
-          ls -la "build-${{ matrix.board }}/"
           exit 1
         fi
         
-        echo "Found binary: $BIN_FILE"
+        echo ""
+        echo "Available .bin files:"
+        for file in $BIN_FILES; do
+          size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file")
+          size_kb=$(echo "scale=2; $size/1024" | bc)
+          echo "  - $file ($size_kb KB)"
+        done
+        
+        # Get the smallest file (actual firmware)
+        BIN_FILE=$(ls -S $BIN_FILES | tail -1)
+        
+        echo ""
+        echo "Selected binary: $BIN_FILE"
         cp "$BIN_FILE" "${{ matrix.output }}"
         
         # Verify
@@ -192,6 +207,9 @@ jobs:
           echo "✓ ESP32 firmware ready: $SIZE_ESP32_KB KB"
           echo "SIZE_ESP32=$SIZE_ESP32" >> $GITHUB_ENV
           echo "SIZE_ESP32_KB=$SIZE_ESP32_KB" >> $GITHUB_ENV
+        else
+          echo "❌ ESP32 firmware not found!"
+          exit 1
         fi
         
         # ESP32-C6
@@ -202,14 +220,23 @@ jobs:
           echo "✓ ESP32-C6 firmware ready: $SIZE_C6_KB KB"
           echo "SIZE_C6=$SIZE_C6" >> $GITHUB_ENV
           echo "SIZE_C6_KB=$SIZE_C6_KB" >> $GITHUB_ENV
+        else
+          echo "❌ ESP32-C6 firmware not found!"
+          exit 1
         fi
         
-        # Copy version.txt
-        cp version.txt version.txt
+        # version.txt already exists in root, no need to copy
         
         echo ""
         echo "Files for release:"
         ls -lh firmware-*.bin version.txt
+        
+        # Validation: Check if ESP32 firmware is suspiciously large (4MB = full partition)
+        if [ $SIZE_ESP32 -ge 4000000 ]; then
+          echo "⚠️  WARNING: ESP32 firmware is 4MB (full partition size)"
+          echo "    This might indicate the build included padding"
+          echo "    Expected size: 200-800 KB for typical firmware"
+        fi
     
     - name: 📤 Create Release
       uses: softprops/action-gh-release@v1
