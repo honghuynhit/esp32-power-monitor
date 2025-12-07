@@ -1,127 +1,66 @@
-name: ESP32 Firmware Build & Deploy -- Redeploy
+name: ESP32 Build with PlatformIO
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - '**.ino'
-      - '**.cpp'
-      - '**.h'
-      - 'version.txt'
+    branches: [main]
   workflow_dispatch:
 
-# ✅ ADD THIS SECTION - Fixes the 403 permission error
 permissions:
-  contents: write  # Allow pushing to repository
+  contents: write
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     
     steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
       with:
-        fetch-depth: 0
+        python-version: '3.11'
     
-    - name: 🔧 Setup Arduino CLI
-      uses: arduino/setup-arduino-cli@v1
-    
-    - name: 📦 Install ESP32 platform
+    - name: Install PlatformIO
       run: |
-        arduino-cli config init
-        arduino-cli core update-index
-        arduino-cli core install esp32:esp32
+        python -m pip install --upgrade pip
+        pip install platformio
     
-    - name: 📖 Read version
+    - name: Read version
       id: version
       run: |
-        if [ -f version.txt ]; then
-          VERSION=$(cat version.txt | tr -d '\n\r')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "✓ Version: $VERSION"
-        else
-          echo "version=1.0.0" >> $GITHUB_OUTPUT
-          echo "1.0.0" > version.txt
-          echo "⚠ Created version.txt with 1.0.0"
-        fi
+        VERSION=$(cat version.txt | tr -d '\n\r')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
     
-    - name: 🔨 Build firmware
+    - name: Build firmware
       run: |
-        echo "Building ESP32 firmware..."
-        
-        # Tìm file .ino (cả trong thư mục con)
-        INO_FILE=$(find . -name "*.ino" | head -n 1)
-        
-        if [ -z "$INO_FILE" ]; then
-          echo "❌ No .ino file found!"
-          exit 1
+        # Tạo platformio.ini nếu chưa có
+        if [ ! -f platformio.ini ]; then
+          cat > platformio.ini << 'EOF'
+          [env:esp32dev]
+          platform = espressif32@6.4.0
+          board = esp32dev
+          framework = arduino
+          monitor_speed = 115200
+          board_build.partitions = min_spiffs.csv
+          upload_speed = 921600
+          EOF
         fi
         
-        echo "Found sketch: $INO_FILE"
+        # Build
+        pio run
         
-        # Lấy thư mục chứa file .ino
-        SKETCH_DIR=$(dirname "$INO_FILE")
+        # Copy firmware
+        cp .pio/build/esp32dev/firmware.bin firmware.bin
         
-        echo "Sketch directory: $SKETCH_DIR"
-        
-        arduino-cli compile \
-          --fqbn esp32:esp32:esp32 \
-          --output-dir build \
-          "$SKETCH_DIR"
-        
-        BIN_FILE=$(find build -name "*.bin" | head -n 1)
-        
-        if [ -z "$BIN_FILE" ]; then
-          echo "❌ No .bin file generated!"
-          exit 1
-        fi
-        
-        cp "$BIN_FILE" firmware.bin
-        
-        SIZE=$(stat -c%s firmware.bin 2>/dev/null || stat -f%z firmware.bin)
-        echo "✓ Firmware built successfully!"
+        # Verify
+        SIZE=$(stat -c%s firmware.bin)
         echo "✓ Size: $SIZE bytes"
-        ls -lh firmware.bin
+        xxd -l 32 firmware.bin
     
-    - name: 📤 Commit firmware
+    - name: Commit and push
       run: |
-        git config --local user.email "github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "GitHub Actions"
-        
-        git add firmware.bin version.txt
-        
-        if git diff --staged --quiet; then
-          echo "ℹ️ No changes to commit"
-          exit 0
-        fi
-        
-        VERSION="${{ steps.version.outputs.version }}"
-        git commit -m "🚀 Auto build firmware v$VERSION [skip ci]"
-        
-        echo "✓ Committed firmware v$VERSION"
-    
-    - name: 🚀 Push changes
-      uses: ad-m/github-push-action@master
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        branch: main
-    
-    - name: 📝 Summary
-      run: |
-        echo "## ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📦 Firmware Information" >> $GITHUB_STEP_SUMMARY
-        echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        SIZE=$(stat -c%s firmware.bin 2>/dev/null || stat -f%z firmware.bin)
-        echo "- **Size:** $SIZE bytes" >> $GITHUB_STEP_SUMMARY
-        echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🔗 OTA URLs" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "https://raw.githubusercontent.com/${{ github.repository }}/main/firmware.bin" >> $GITHUB_STEP_SUMMARY
-        echo "https://raw.githubusercontent.com/${{ github.repository }}/main/version.txt" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📱 ESP32 will auto-update within 6 hours" >> $GITHUB_STEP_SUMMARY
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add firmware.bin
+        git commit -m "Build v${{ steps.version.outputs.version }} [skip ci]" || exit 0
+        git push
