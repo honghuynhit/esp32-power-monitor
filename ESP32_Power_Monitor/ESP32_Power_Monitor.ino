@@ -23,7 +23,7 @@ String firmwareBinURL;
 
 // ========== Settings ==========
 const char* DEVICE_NAME = "ESP32-Power-Monitor";
-const char* FIRMWARE_VERSION = "1.0.5";  // Version trong code (hardcoded)
+const char* FIRMWARE_VERSION = "1.0.7";  // Version trong code (hardcoded)
 String currentVersion;  // Version thực tế đang chạy (từ NVRAM hoặc FIRMWARE_VERSION)
 
 const int NIGHT_CHECK_HOUR = 21;
@@ -52,8 +52,8 @@ void setup() {
   delay(1000);
   
   Serial.println("\n╔════════════════════════════════════════╗");
-  Serial.println("║   ESP32 Power Monitor v1.0.5           ║");
-  Serial.println("║   + NVRAM + OTA + Version Management   ║");
+  Serial.println("║   ESP32 Power Monitor v1.0.6           ║");
+  Serial.println("║   + NVRAM + OTA + GitHub Releases      ║");
   Serial.println("╚════════════════════════════════════════╝");
   
   // Khởi tạo NVRAM storage
@@ -70,7 +70,7 @@ void setup() {
     Serial.println("   Code:  " + String(FIRMWARE_VERSION));
     currentVersion = String(FIRMWARE_VERSION);
     configStore.putString("current_ver", currentVersion);
-    Serial.println("✓ Đã cập nhật version trong NVRAM");
+    Serial.println("✓ Đã cập nhật version trong NVRAM - VT");
   }
   
 #ifdef FIRST_TIME_SETUP
@@ -244,12 +244,12 @@ void setupCredentials() {
   
   // OTA URLs
   Serial.println("6. Firmware Version URL:");
-  Serial.println("   (VD: https://raw.githubusercontent.com/USER/REPO/main/version.txt)");
+  Serial.println("   (VD: https://github.com/USER/REPO/releases/latest/download/version.txt)");
   String verUrl = readSerialInput();
   configStore.putString("ver_url", verUrl);
   
   Serial.println("7. Firmware Binary URL:");
-  Serial.println("   (VD: https://raw.githubusercontent.com/USER/REPO/main/firmware.bin)");
+  Serial.println("   (VD: https://github.com/USER/REPO/releases/latest/download/firmware.bin)");
   String binUrl = readSerialInput();
   configStore.putString("bin_url", binUrl);
   
@@ -371,9 +371,13 @@ void sendLongRunAlert(unsigned long hours, unsigned long minutes, int count) {
   sendTelegramMessage(teleMsg);
 }
 
+// ============ OTA UPDATE WITH REDIRECT HANDLING ============
+
 void checkForOTAUpdate() {
-  Serial.println("\n--- Kiểm tra OTA Update ---");
-  Serial.println("Current version: " + currentVersion);
+  Serial.println("\n╔═══════════════════════════════════════╗");
+  Serial.println("║  🔍 KIỂM TRA OTA UPDATE               ║");
+  Serial.println("╚═══════════════════════════════════════╝");
+  Serial.println("📦 Current version: " + currentVersion);
   
   WiFiClientSecure client;
   client.setInsecure();
@@ -388,18 +392,37 @@ void checkForOTAUpdate() {
     versionURL += "&t=" + String(millis());
   }
   
+  Serial.println("🌐 URL: " + firmwareVersionURL);
+  
+  // ✅ BẬT REDIRECT FOLLOWING
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  http.setRedirectLimit(10);
+  
   http.begin(client, versionURL.c_str());
+  http.addHeader("Cache-Control", "no-cache");
+  
   int httpCode = http.GET();
+  
+  Serial.printf("📡 HTTP Response: %d", httpCode);
   
   if (httpCode == 200) {
     String latestVersion = http.getString();
     latestVersion.trim();
     
-    Serial.println("Latest version: " + latestVersion);
+    Serial.println(" ✓");
+    Serial.println("🆕 Latest version: " + latestVersion);
+    
+    if (latestVersion.length() == 0) {
+      Serial.println("❌ Version file trống!");
+      http.end();
+      return;
+    }
     
     if (latestVersion != currentVersion) {
-      Serial.println("🆕 Có bản cập nhật mới!");
-      Serial.println("   " + currentVersion + " → " + latestVersion);
+      Serial.println("\n╔═══════════════════════════════════════╗");
+      Serial.println("║  🎉 CÓ BẢN CẬP NHẬT MỚI!             ║");
+      Serial.println("╚═══════════════════════════════════════╝");
+      Serial.println("   📦 " + currentVersion + " → " + latestVersion);
       
       sendTelegramMessage("🆕 Phát hiện update!\n📦 " + currentVersion + " → " + latestVersion + "\n🔄 Đang cập nhật...");
       
@@ -410,14 +433,30 @@ void checkForOTAUpdate() {
     } else {
       Serial.println("✓ Đã là phiên bản mới nhất");
     }
+  } else if (httpCode > 0) {
+    Serial.println(" ✗");
+    Serial.printf("❌ HTTP Error: %d\n", httpCode);
+    
+    if (httpCode >= 300 && httpCode < 400) {
+      Serial.println("⚠️  Redirect không được xử lý!");
+      Serial.println("   Có thể GitHub đã thay đổi redirect behavior");
+    } else if (httpCode == 404) {
+      Serial.println("⚠️  File version.txt không tồn tại!");
+      Serial.println("   Kiểm tra lại release trên GitHub");
+    }
   } else {
-    Serial.printf("✗ Lỗi kiểm tra version: HTTP %d\n", httpCode);
+    Serial.println(" ✗");
+    Serial.printf("❌ Connection failed: %s\n", http.errorToString(httpCode).c_str());
   }
   
   http.end();
 }
 
 void performOTAUpdate(String newVersion) {
+  Serial.println("\n╔═══════════════════════════════════════╗");
+  Serial.println("║  📥 DOWNLOAD FIRMWARE                 ║");
+  Serial.println("╚═══════════════════════════════════════╝");
+  
   WiFiClientSecure client;
   client.setInsecure();
   
@@ -431,7 +470,11 @@ void performOTAUpdate(String newVersion) {
     url += "&t=" + String(millis());
   }
   
-  Serial.println("Download URL: " + url);
+  Serial.println("🌐 URL: " + firmwareBinURL);
+  
+  // ✅ BẬT REDIRECT FOLLOWING
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  http.setRedirectLimit(10);
   
   http.begin(client, url.c_str());
   
@@ -442,10 +485,14 @@ void performOTAUpdate(String newVersion) {
   
   int httpCode = http.GET();
   
+  Serial.printf("📡 HTTP Response: %d", httpCode);
+  
   if (httpCode == 200) {
+    Serial.println(" ✓");
+    
     int contentLength = http.getSize();
     
-    Serial.printf("📦 HTTP %d - Content-Length: %d bytes\n", httpCode, contentLength);
+    Serial.printf("📦 Content-Length: %d bytes (%.2f KB)\n", contentLength, contentLength / 1024.0);
     
     if (contentLength <= 0) {
       Serial.println("❌ Không lấy được kích thước firmware!");
@@ -462,18 +509,17 @@ void performOTAUpdate(String newVersion) {
       return;
     }
     
-    Serial.printf("📦 Firmware: %d bytes (%.2f KB)\n", contentLength, contentLength / 1024.0);
-    
     if (!Update.begin(contentLength)) {
       Serial.println("❌ Không đủ bộ nhớ để update!");
       Serial.printf("   Cần: %d bytes\n", contentLength);
+      Serial.printf("   Free heap: %d bytes\n", ESP.getFreeHeap());
       http.end();
       return;
     }
     
-    Serial.println("┌─────────────────────────────────────────┐");
-    Serial.println("│  🔄 Đang cập nhật firmware...           │");
-    Serial.println("└─────────────────────────────────────────┘");
+    Serial.println("\n╔═══════════════════════════════════════╗");
+    Serial.println("║  🔄 ĐANG CẬP NHẬT FIRMWARE...         ║");
+    Serial.println("╚═══════════════════════════════════════╝\n");
     
     WiFiClient * stream = http.getStreamPtr();
     uint8_t buff[128] = { 0 };
@@ -527,16 +573,21 @@ void performOTAUpdate(String newVersion) {
     if (Update.end(true)) {
       if (Update.isFinished()) {
         unsigned long elapsed = millis() - startTime;
-        Serial.println("\n✅ Cập nhật thành công!");
+        
+        Serial.println("\n╔═══════════════════════════════════════╗");
+        Serial.println("║  ✅ CẬP NHẬT THÀNH CÔNG!              ║");
+        Serial.println("╚═══════════════════════════════════════╝");
         Serial.printf("📊 Đã ghi: %d bytes trong %.1f giây\n", written, elapsed / 1000.0);
+        Serial.printf("⚡ Tốc độ: %.2f KB/s\n", (written / 1024.0) / (elapsed / 1000.0));
         
         // ✅ LƯU VERSION MỚI VÀO NVRAM
         configStore.putString("current_ver", newVersion);
+        configStore.remove("pending_ver");
         Serial.println("✓ Đã lưu version mới: " + newVersion);
         
         sendTelegramMessage("✅ Cập nhật thành công!\n📦 v" + newVersion + "\n💾 " + String(contentLength / 1024) + " KB\n🔄 Khởi động lại...");
         
-        Serial.println("🔄 Khởi động lại trong 3 giây...");
+        Serial.println("\n🔄 Khởi động lại trong 3 giây...");
         delay(3000);
         ESP.restart();
       } else {
@@ -549,8 +600,19 @@ void performOTAUpdate(String newVersion) {
       // Xóa pending version nếu update thất bại
       configStore.remove("pending_ver");
     }
+  } else if (httpCode > 0) {
+    Serial.println(" ✗");
+    Serial.printf("❌ HTTP Error: %d\n", httpCode);
+    
+    if (httpCode >= 300 && httpCode < 400) {
+      Serial.println("⚠️  Redirect không được xử lý!");
+    } else if (httpCode == 404) {
+      Serial.println("⚠️  File firmware.bin không tồn tại!");
+      Serial.println("   Kiểm tra lại release trên GitHub");
+    }
   } else {
-    Serial.printf("❌ HTTP GET failed: %d\n", httpCode);
+    Serial.println(" ✗");
+    Serial.printf("❌ Connection failed: %s\n", http.errorToString(httpCode).c_str());
   }
   
   http.end();
