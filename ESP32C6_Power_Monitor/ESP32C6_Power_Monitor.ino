@@ -23,7 +23,8 @@ String firmwareBinURL;
 
 // ========== Settings ==========
 const char* DEVICE_NAME = "ESP32-Power-Monitor-PNP";
-const char* FIRMWARE_VERSION = "1.0.8";  // ⚠️ CHỈ DÙNG KHI NVRAM TRỐNG
+const char* DEVICE_SHORT_NAME = "PNP";  // Tên ngắn gọn cho thông báo
+const char* FIRMWARE_VERSION = "1.0.9";  // ⚠️ CHỈ DÙNG KHI NVRAM TRỐNG
 String currentVersion;  // Version thực tế (luôn từ NVRAM)
 
 const int NIGHT_CHECK_HOUR = 21;
@@ -137,7 +138,7 @@ void setup() {
     preferences.putInt("count", dailyPowerOnCount);
   }
   
-  Serial.printf("\n⚡ NGUỒN BẬT - Lần #%d hôm nay\n", dailyPowerOnCount);
+  Serial.printf("\n⚡ NGUỒN %s BẬT - Lần #%d hôm nay\n", DEVICE_SHORT_NAME, dailyPowerOnCount);
   powerOnStartTime = millis();
   
   Serial.printf("\n📋 Chế độ cảnh báo:\n");
@@ -363,7 +364,8 @@ void sendPowerOnLog(struct tm timeinfo) {
   
   String jsonData = "{";
   jsonData += "\"status\":\"power_on\",";
-  jsonData += "\"message\":\"Nguồn bật - Lần #" + String(dailyPowerOnCount) + "\",";
+  jsonData += "\"device\":\"" + String(DEVICE_SHORT_NAME) + "\",";
+  jsonData += "\"message\":\"Nguồn " + String(DEVICE_SHORT_NAME) + " bật - Lần #" + String(dailyPowerOnCount) + "\",";
   jsonData += "\"daily_count\":" + String(dailyPowerOnCount) + ",";
   jsonData += "\"version\":\"" + currentVersion + "\",";
   jsonData += "\"time\":\"" + String(timeStr) + "\",";
@@ -373,7 +375,7 @@ void sendPowerOnLog(struct tm timeinfo) {
   http.POST(jsonData);
   http.end();
   
-  String teleMsg = "⚡ NGUỒN BẬT\n🔢 Lần #" + String(dailyPowerOnCount) + "\n📦 v" + currentVersion + "\n⏰ " + String(timeStr);
+  String teleMsg = "⚡ Nguồn " + String(DEVICE_SHORT_NAME) + " BẬT\n🔢 Lần #" + String(dailyPowerOnCount) + "\n📦 v" + currentVersion + "\n⏰ " + String(timeStr);
   sendTelegramMessage(teleMsg);
 }
 
@@ -391,17 +393,18 @@ void sendLongRunAlert(unsigned long hours, unsigned long minutes, int count) {
   
   String jsonData = "{";
   jsonData += "\"status\":\"long_running\",";
+  jsonData += "\"device\":\"" + String(DEVICE_SHORT_NAME) + "\",";
   jsonData += "\"alert_count\":" + String(count) + ",";
   jsonData += "\"run_time_hours\":" + String(hours) + ",";
   jsonData += "\"run_time_minutes\":" + String(minutes) + ",";
-  jsonData += "\"message\":\"Hoạt động " + String(hours) + "h " + String(minutes) + "m\",";
+  jsonData += "\"message\":\"" + String(DEVICE_SHORT_NAME) + " hoạt động " + String(hours) + "h " + String(minutes) + "m\",";
   jsonData += "\"time\":\"" + String(timeStr) + "\"";
   jsonData += "}";
   
   http.POST(jsonData);
   http.end();
   
-  String teleMsg = "⏰ HOẠT ĐỘNG LÂU\n🔌 " + String(hours) + "h " + String(minutes) + "m\n📊 Lần #" + String(count);
+  String teleMsg = "⏰ " + String(DEVICE_SHORT_NAME) + " HOẠT ĐỘNG LÂU\n🔌 " + String(hours) + "h " + String(minutes) + "m\n📊 Lần #" + String(count);
   sendTelegramMessage(teleMsg);
 }
 
@@ -456,7 +459,7 @@ void checkForOTAUpdate() {
       Serial.println("╚═══════════════════════════════════════╝");
       Serial.println("   📦 " + currentVersion + " → " + latestVersion);
       
-      sendTelegramMessage("🆕 Phát hiện update!\n📦 " + currentVersion + " → " + latestVersion + "\n🔄 Đang cập nhật...");
+      sendTelegramMessage("🆕 " + String(DEVICE_SHORT_NAME) + " phát hiện update!\n📦 " + currentVersion + " → " + latestVersion + "\n🔄 Đang cập nhật...");
       
       performOTAUpdate(latestVersion);
     } else {
@@ -598,7 +601,7 @@ void performOTAUpdate(String newVersion) {
         configStore.putString("current_ver", newVersion);
         Serial.println("💾 Đã lưu version mới vào NVRAM: " + newVersion);
         
-        sendTelegramMessage("✅ Cập nhật thành công!\n📦 v" + newVersion + "\n💾 " + String(contentLength / 1024) + " KB\n🔄 Khởi động lại...");
+        sendTelegramMessage("✅ " + String(DEVICE_SHORT_NAME) + " cập nhật thành công!\n📦 v" + newVersion + "\n💾 " + String(contentLength / 1024) + " KB\n🔄 Khởi động lại...");
         
         Serial.println("\n🔄 Khởi động lại trong 3 giây...");
         delay(3000);
@@ -655,9 +658,10 @@ void sendWebhookAlert(int count, bool isUrgent) {
   
   String jsonData = "{";
   jsonData += "\"status\":\"power_on\",";
+  jsonData += "\"device\":\"" + String(DEVICE_SHORT_NAME) + "\",";
   jsonData += "\"alert_count\":" + String(count) + ",";
   jsonData += "\"is_urgent\":" + String(isUrgent ? "true" : "false") + ",";
-  jsonData += "\"message\":\"Cảnh báo #" + String(count) + "\",";
+  jsonData += "\"message\":\"" + String(DEVICE_SHORT_NAME) + " cảnh báo #" + String(count) + "\",";
   jsonData += "\"time\":\"" + String(timeStr) + "\"";
   jsonData += "}";
   
@@ -666,7 +670,7 @@ void sendWebhookAlert(int count, bool isUrgent) {
 }
 
 void sendTelegramAlert(int count, bool isUrgent) {
-  String message = isUrgent ? "🚨 KHẨN CẤP #" + String(count) : "⚠️ CẢNH BÁO";
+  String message = isUrgent ? "🚨 " + String(DEVICE_SHORT_NAME) + " KHẨN CẤP #" + String(count) : "⚠️ " + String(DEVICE_SHORT_NAME) + " CẢNH BÁO";
   message += "\n🔌 Nguồn chưa tắt";
   sendTelegramMessage(message);
 }
