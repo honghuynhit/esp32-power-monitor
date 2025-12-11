@@ -22,9 +22,10 @@ String firmwareVersionURL;
 String firmwareBinURL;
 
 // ========== Settings ==========
-const char* DEVICE_NAME = "ESP32-Power-Monitor";
-const char* FIRMWARE_VERSION = "1.0.7";  // Version trong code (hardcoded)
-String currentVersion;  // Version thực tế đang chạy (từ NVRAM hoặc FIRMWARE_VERSION)
+const char* DEVICE_NAME = "ESP32-Power-Monitor-PNC";
+const char* DEVICE_SHORT_NAME = "PNC";  // Tên ngắn gọn cho thông báo
+const char* FIRMWARE_VERSION = "1.0.7";  // ⚠️ CHỈ DÙNG KHI NVRAM TRỐNG
+String currentVersion;  // Version thực tế (luôn từ NVRAM)
 
 const int NIGHT_CHECK_HOUR = 21;
 const int NIGHT_CHECK_MINUTE = 30;
@@ -49,28 +50,28 @@ const unsigned long OTA_CHECK_INTERVAL = 6 * 60 * 60 * 1000;
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(2000);
   
   Serial.println("\n╔════════════════════════════════════════╗");
-  Serial.println("║   ESP32 Power Monitor v1.0.6           ║");
-  Serial.println("║   + NVRAM + OTA + GitHub Releases      ║");
+  Serial.println("║   ESP32 Power Monitor PNC v1.0.7       ║");
+  Serial.println("║   + NVRAM + OTA Fixed                  ║");
   Serial.println("╚════════════════════════════════════════╝");
   
   // Khởi tạo NVRAM storage
   configStore.begin("config", false);
   preferences.begin("power-monitor", false);
   
-  // Load version từ NVRAM hoặc dùng FIRMWARE_VERSION
-  currentVersion = configStore.getString("current_ver", FIRMWARE_VERSION);
+  // ✅ FIX: CHỈ ĐỌC VERSION TỪ NVRAM, KHÔNG GHI ĐÈ
+  currentVersion = configStore.getString("current_ver", "");
   
-  // Nếu FIRMWARE_VERSION mới hơn version trong NVRAM -> cập nhật
-  if (String(FIRMWARE_VERSION) != currentVersion) {
-    Serial.println("🆕 Phát hiện version mới trong firmware!");
-    Serial.println("   NVRAM: " + currentVersion);
-    Serial.println("   Code:  " + String(FIRMWARE_VERSION));
+  if (currentVersion.length() == 0) {
+    // Lần đầu tiên chạy → lưu version từ code
+    Serial.println("🆕 Lần đầu khởi động, lưu version: " + String(FIRMWARE_VERSION));
     currentVersion = String(FIRMWARE_VERSION);
     configStore.putString("current_ver", currentVersion);
-    Serial.println("✓ Đã cập nhật version trong NVRAM - VT");
+  } else {
+    // Đã có version trong NVRAM → dùng version đó
+    Serial.println("📦 Version từ NVRAM: " + currentVersion);
   }
   
 #ifdef FIRST_TIME_SETUP
@@ -84,7 +85,7 @@ void setup() {
   Serial.println("→ Comment dòng #define FIRST_TIME_SETUP");
   Serial.println("→ Upload lại code");
   Serial.println("→ ESP32 sẽ dùng credentials đã lưu");
-  while(1) delay(1000); // Dừng lại
+  while(1) delay(1000);
 #endif
   
   // ========== LOAD CREDENTIALS TỪ NVRAM ==========
@@ -137,7 +138,7 @@ void setup() {
     preferences.putInt("count", dailyPowerOnCount);
   }
   
-  Serial.printf("\n⚡ NGUỒN BẬT - Lần #%d hôm nay\n", dailyPowerOnCount);
+  Serial.printf("\n⚡ NGUỒN %s BẬT - Lần #%d hôm nay\n", DEVICE_SHORT_NAME, dailyPowerOnCount);
   powerOnStartTime = millis();
   
   Serial.printf("\n📋 Chế độ cảnh báo:\n");
@@ -211,6 +212,45 @@ void loop() {
                   timeinfo.tm_hour, timeinfo.tm_min, alertCount, hours, minutes, dailyPowerOnCount);
   }
   
+  // ✅ DEBUG COMMANDS QUA SERIAL
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    
+    if (cmd == "version") {
+      Serial.println("\n╔═══════════════════════════════════════╗");
+      Serial.println("║  VERSION INFO                         ║");
+      Serial.println("╚═══════════════════════════════════════╝");
+      Serial.println("Code hardcoded: " + String(FIRMWARE_VERSION));
+      Serial.println("NVRAM stored:   " + configStore.getString("current_ver", "N/A"));
+      Serial.println("Current active: " + currentVersion);
+    }
+    
+    if (cmd == "reset_version") {
+      Serial.println("\n⚠️  RESET VERSION VỀ CODE DEFAULT");
+      configStore.putString("current_ver", FIRMWARE_VERSION);
+      Serial.println("✓ Đã reset về: " + String(FIRMWARE_VERSION));
+      Serial.println("🔄 Khởi động lại...");
+      delay(2000);
+      ESP.restart();
+    }
+    
+    if (cmd == "force_ota") {
+      Serial.println("\n🔄 FORCE CHECK OTA...");
+      checkForOTAUpdate();
+    }
+    
+    if (cmd == "help") {
+      Serial.println("\n╔═══════════════════════════════════════╗");
+      Serial.println("║  SERIAL COMMANDS                      ║");
+      Serial.println("╚═══════════════════════════════════════╝");
+      Serial.println("version       - Xem thông tin version");
+      Serial.println("reset_version - Reset về code default");
+      Serial.println("force_ota     - Kiểm tra OTA ngay");
+      Serial.println("help          - Hiển thị menu này");
+    }
+  }
+  
   delay(1000);
 }
 
@@ -219,7 +259,6 @@ void loop() {
 void setupCredentials() {
   Serial.println("\n=== SETUP CREDENTIALS ===\n");
   
-  // WiFi
   Serial.println("1. WiFi SSID:");
   String ssid = readSerialInput();
   configStore.putString("wifi_ssid", ssid);
@@ -228,12 +267,10 @@ void setupCredentials() {
   String pass = readSerialInput();
   configStore.putString("wifi_pass", pass);
   
-  // Webhook
   Serial.println("3. Google Apps Script Webhook URL:");
   String webhook = readSerialInput();
   configStore.putString("webhook", webhook);
   
-  // Telegram
   Serial.println("4. Telegram Bot Token:");
   String token = readSerialInput();
   configStore.putString("tg_token", token);
@@ -242,7 +279,6 @@ void setupCredentials() {
   String chatid = readSerialInput();
   configStore.putString("tg_chatid", chatid);
   
-  // OTA URLs
   Serial.println("6. Firmware Version URL:");
   Serial.println("   (VD: https://github.com/USER/REPO/releases/latest/download/version.txt)");
   String verUrl = readSerialInput();
@@ -253,7 +289,6 @@ void setupCredentials() {
   String binUrl = readSerialInput();
   configStore.putString("bin_url", binUrl);
   
-  // Đánh dấu đã setup
   configStore.putBool("configured", true);
   
   Serial.println("\n✓ Credentials đã được lưu vào NVRAM!");
@@ -329,7 +364,8 @@ void sendPowerOnLog(struct tm timeinfo) {
   
   String jsonData = "{";
   jsonData += "\"status\":\"power_on\",";
-  jsonData += "\"message\":\"Nguồn bật - Lần #" + String(dailyPowerOnCount) + "\",";
+  jsonData += "\"device\":\"" + String(DEVICE_SHORT_NAME) + "\",";
+  jsonData += "\"message\":\"Nguồn " + String(DEVICE_SHORT_NAME) + " bật - Lần #" + String(dailyPowerOnCount) + "\",";
   jsonData += "\"daily_count\":" + String(dailyPowerOnCount) + ",";
   jsonData += "\"version\":\"" + currentVersion + "\",";
   jsonData += "\"time\":\"" + String(timeStr) + "\",";
@@ -339,7 +375,7 @@ void sendPowerOnLog(struct tm timeinfo) {
   http.POST(jsonData);
   http.end();
   
-  String teleMsg = "⚡ NGUỒN BẬT\n🔢 Lần #" + String(dailyPowerOnCount) + "\n📦 v" + currentVersion + "\n⏰ " + String(timeStr);
+  String teleMsg = "⚡ Nguồn " + String(DEVICE_SHORT_NAME) + " BẬT\n🔢 Lần #" + String(dailyPowerOnCount) + "\n📦 v" + currentVersion + "\n⏰ " + String(timeStr);
   sendTelegramMessage(teleMsg);
 }
 
@@ -357,21 +393,22 @@ void sendLongRunAlert(unsigned long hours, unsigned long minutes, int count) {
   
   String jsonData = "{";
   jsonData += "\"status\":\"long_running\",";
+  jsonData += "\"device\":\"" + String(DEVICE_SHORT_NAME) + "\",";
   jsonData += "\"alert_count\":" + String(count) + ",";
   jsonData += "\"run_time_hours\":" + String(hours) + ",";
   jsonData += "\"run_time_minutes\":" + String(minutes) + ",";
-  jsonData += "\"message\":\"Hoạt động " + String(hours) + "h " + String(minutes) + "m\",";
+  jsonData += "\"message\":\"" + String(DEVICE_SHORT_NAME) + " hoạt động " + String(hours) + "h " + String(minutes) + "m\",";
   jsonData += "\"time\":\"" + String(timeStr) + "\"";
   jsonData += "}";
   
   http.POST(jsonData);
   http.end();
   
-  String teleMsg = "⏰ HOẠT ĐỘNG LÂU\n🔌 " + String(hours) + "h " + String(minutes) + "m\n📊 Lần #" + String(count);
+  String teleMsg = "⏰ " + String(DEVICE_SHORT_NAME) + " HOẠT ĐỘNG LÂU\n🔌 " + String(hours) + "h " + String(minutes) + "m\n📊 Lần #" + String(count);
   sendTelegramMessage(teleMsg);
 }
 
-// ============ OTA UPDATE WITH REDIRECT HANDLING ============
+// ============ OTA UPDATE ============
 
 void checkForOTAUpdate() {
   Serial.println("\n╔═══════════════════════════════════════╗");
@@ -384,7 +421,6 @@ void checkForOTAUpdate() {
   
   HTTPClient http;
   
-  // Add cache-busting cho version check
   String versionURL = firmwareVersionURL;
   if (versionURL.indexOf('?') == -1) {
     versionURL += "?t=" + String(millis());
@@ -394,7 +430,6 @@ void checkForOTAUpdate() {
   
   Serial.println("🌐 URL: " + firmwareVersionURL);
   
-  // ✅ BẬT REDIRECT FOLLOWING
   http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   http.setRedirectLimit(10);
   
@@ -424,10 +459,7 @@ void checkForOTAUpdate() {
       Serial.println("╚═══════════════════════════════════════╝");
       Serial.println("   📦 " + currentVersion + " → " + latestVersion);
       
-      sendTelegramMessage("🆕 Phát hiện update!\n📦 " + currentVersion + " → " + latestVersion + "\n🔄 Đang cập nhật...");
-      
-      // Lưu version mới trước khi update
-      configStore.putString("pending_ver", latestVersion);
+      sendTelegramMessage("🆕 " + String(DEVICE_SHORT_NAME) + " phát hiện update!\n📦 " + currentVersion + " → " + latestVersion + "\n🔄 Đang cập nhật...");
       
       performOTAUpdate(latestVersion);
     } else {
@@ -439,10 +471,8 @@ void checkForOTAUpdate() {
     
     if (httpCode >= 300 && httpCode < 400) {
       Serial.println("⚠️  Redirect không được xử lý!");
-      Serial.println("   Có thể GitHub đã thay đổi redirect behavior");
     } else if (httpCode == 404) {
       Serial.println("⚠️  File version.txt không tồn tại!");
-      Serial.println("   Kiểm tra lại release trên GitHub");
     }
   } else {
     Serial.println(" ✗");
@@ -462,7 +492,6 @@ void performOTAUpdate(String newVersion) {
   
   HTTPClient http;
   
-  // Add cache-busting parameter
   String url = firmwareBinURL;
   if (url.indexOf('?') == -1) {
     url += "?t=" + String(millis());
@@ -472,13 +501,10 @@ void performOTAUpdate(String newVersion) {
   
   Serial.println("🌐 URL: " + firmwareBinURL);
   
-  // ✅ BẬT REDIRECT FOLLOWING
   http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   http.setRedirectLimit(10);
   
   http.begin(client, url.c_str());
-  
-  // Force no-cache headers
   http.addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   http.addHeader("Pragma", "no-cache");
   http.addHeader("Expires", "0");
@@ -496,23 +522,18 @@ void performOTAUpdate(String newVersion) {
     
     if (contentLength <= 0) {
       Serial.println("❌ Không lấy được kích thước firmware!");
-      Serial.println("   Server không trả về Content-Length header");
       http.end();
       return;
     }
     
     if (contentLength < 100000) {
       Serial.printf("❌ File quá nhỏ: %d bytes (%.2f KB)\n", contentLength, contentLength / 1024.0);
-      Serial.println("   Firmware ESP32 phải > 100KB");
-      Serial.println("   Có thể đang tải file sai hoặc bị cache");
       http.end();
       return;
     }
     
     if (!Update.begin(contentLength)) {
       Serial.println("❌ Không đủ bộ nhớ để update!");
-      Serial.printf("   Cần: %d bytes\n", contentLength);
-      Serial.printf("   Free heap: %d bytes\n", ESP.getFreeHeap());
       http.end();
       return;
     }
@@ -527,7 +548,6 @@ void performOTAUpdate(String newVersion) {
     int lastPercent = -1;
     unsigned long startTime = millis();
     
-    // Đọc và ghi từng chunk với progress bar
     while (http.connected() && (written < contentLength)) {
       size_t available = stream->available();
       
@@ -538,12 +558,10 @@ void performOTAUpdate(String newVersion) {
           Update.write(buff, c);
           written += c;
           
-          // Tính % và hiển thị
           int percent = (written * 100) / contentLength;
           
-          // Hiển thị mỗi 5%
           if (percent != lastPercent && percent % 5 == 0) {
-            // Progress bar với 20 ký tự
+            Serial.println("\n");
             Serial.print("\r[");
             int bars = percent / 5;
             for (int i = 0; i < 20; i++) {
@@ -551,7 +569,6 @@ void performOTAUpdate(String newVersion) {
               else Serial.print("░");
             }
             
-            // Tính tốc độ
             unsigned long elapsed = millis() - startTime;
             float speed = (elapsed > 0) ? (written / 1024.0) / (elapsed / 1000.0) : 0;
             
@@ -568,7 +585,7 @@ void performOTAUpdate(String newVersion) {
       delay(1);
     }
     
-    Serial.println(); // Xuống dòng sau progress bar
+    Serial.println();
     
     if (Update.end(true)) {
       if (Update.isFinished()) {
@@ -582,10 +599,9 @@ void performOTAUpdate(String newVersion) {
         
         // ✅ LƯU VERSION MỚI VÀO NVRAM
         configStore.putString("current_ver", newVersion);
-        configStore.remove("pending_ver");
-        Serial.println("✓ Đã lưu version mới: " + newVersion);
+        Serial.println("💾 Đã lưu version mới vào NVRAM: " + newVersion);
         
-        sendTelegramMessage("✅ Cập nhật thành công!\n📦 v" + newVersion + "\n💾 " + String(contentLength / 1024) + " KB\n🔄 Khởi động lại...");
+        sendTelegramMessage("✅ " + String(DEVICE_SHORT_NAME) + " cập nhật thành công!\n📦 v" + newVersion + "\n💾 " + String(contentLength / 1024) + " KB\n🔄 Khởi động lại...");
         
         Serial.println("\n🔄 Khởi động lại trong 3 giây...");
         delay(3000);
@@ -596,9 +612,6 @@ void performOTAUpdate(String newVersion) {
     } else {
       Serial.println("\n❌ Update.end() thất bại!");
       Serial.printf("Error: %s\n", Update.errorString());
-      
-      // Xóa pending version nếu update thất bại
-      configStore.remove("pending_ver");
     }
   } else if (httpCode > 0) {
     Serial.println(" ✗");
@@ -608,7 +621,6 @@ void performOTAUpdate(String newVersion) {
       Serial.println("⚠️  Redirect không được xử lý!");
     } else if (httpCode == 404) {
       Serial.println("⚠️  File firmware.bin không tồn tại!");
-      Serial.println("   Kiểm tra lại release trên GitHub");
     }
   } else {
     Serial.println(" ✗");
@@ -646,9 +658,10 @@ void sendWebhookAlert(int count, bool isUrgent) {
   
   String jsonData = "{";
   jsonData += "\"status\":\"power_on\",";
+  jsonData += "\"device\":\"" + String(DEVICE_SHORT_NAME) + "\",";
   jsonData += "\"alert_count\":" + String(count) + ",";
   jsonData += "\"is_urgent\":" + String(isUrgent ? "true" : "false") + ",";
-  jsonData += "\"message\":\"Cảnh báo #" + String(count) + "\",";
+  jsonData += "\"message\":\"" + String(DEVICE_SHORT_NAME) + " cảnh báo #" + String(count) + "\",";
   jsonData += "\"time\":\"" + String(timeStr) + "\"";
   jsonData += "}";
   
@@ -657,7 +670,7 @@ void sendWebhookAlert(int count, bool isUrgent) {
 }
 
 void sendTelegramAlert(int count, bool isUrgent) {
-  String message = isUrgent ? "🚨 KHẨN CẤP #" + String(count) : "⚠️ CẢNH BÁO";
+  String message = isUrgent ? "🚨 " + String(DEVICE_SHORT_NAME) + " KHẨN CẤP #" + String(count) : "⚠️ " + String(DEVICE_SHORT_NAME) + " CẢNH BÁO";
   message += "\n🔌 Nguồn chưa tắt";
   sendTelegramMessage(message);
 }
