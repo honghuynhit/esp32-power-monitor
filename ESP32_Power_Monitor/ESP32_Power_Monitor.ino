@@ -401,7 +401,7 @@ void sendLongRunAlert(unsigned long hours, unsigned long minutes, int count) {
   jsonData += "\"time\":\"" + String(timeStr) + "\"";
   jsonData += "}";
   
-  http.POST(jsonData);
+  // http.POST(jsonData);
   http.end();
   
   String teleMsg = "⏰ " + String(DEVICE_SHORT_NAME) + " HOẠT ĐỘNG LÂU\n🔌 " + String(hours) + "h " + String(minutes) + "m\n📊 Lần #" + String(count);
